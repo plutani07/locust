@@ -1,0 +1,8 @@
+{
+  "appId": "com.plutani.locust",
+  "appName": "Locust",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#08090F"
+  }
+}
