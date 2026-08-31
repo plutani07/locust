@@ -275,6 +275,7 @@ textarea.inp{resize:vertical;min-height:92px;line-height:1.6}
   background:var(--surface);transition:border-color .2s}
 .ebanner:active{border-color:var(--iris)}
 .ebanner img{width:100%;height:auto;display:block}
+.ebanner{contain:paint;will-change:transform}
 .ebanner.set{border:1px solid var(--line-soft);min-height:0;padding:0;overflow:hidden;
   display:block;background:var(--void)}
 .parttitle{display:block;width:calc(100% - 76px);max-width:640px;margin:22px auto 0;
@@ -1024,6 +1025,31 @@ const Store = (() => {
   };
 })();
 
+/* ---------------- media ----------------
+   Covers and banners used to sit inside the story record, so every autosave
+   cloned megabytes of image data to change one word. Stories now hold short
+   keys; the bytes live in one entry that's only written when media changes. */
+let MEDIA = {}, mediaDirty = false, mediaT = 0;
+const isData = v => typeof v === 'string' && v.startsWith('data:');
+const mediaURL = v => !v ? '' : (isData(v) ? v : (MEDIA[v] || ''));
+function addMedia(dataURL){
+  if (!isData(dataURL)) return dataURL;
+  const id = 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  MEDIA[id] = dataURL;
+  mediaDirty = true;
+  clearTimeout(mediaT);
+  mediaT = setTimeout(() => { if (mediaDirty){ mediaDirty = false; Store.pref('media', MEDIA); } }, 400);
+  return id;
+}
+function dropMedia(v){
+  if (v && !isData(v) && MEDIA[v]){
+    delete MEDIA[v];
+    mediaDirty = true;
+    clearTimeout(mediaT);
+    mediaT = setTimeout(() => { if (mediaDirty){ mediaDirty = false; Store.pref('media', MEDIA); } }, 400);
+  }
+}
+
 /* ---------------- images ---------------- */
 const ANIMATED = /^image\/(gif|apng|webp|avif)$/i;
 const MAX_SRC = 30e6;                      // refuse absurd files rather than dying on them
@@ -1082,8 +1108,8 @@ const idle = () => new Promise(r => setTimeout(r, 60));   // let the collector b
 function coversOf(s){ return (s && s.covers && s.covers.length) ? s.covers : []; }
 function stackHTML(list){
   if (!list.length) return '<span class="blank">No cover</span>';
-  if (list.length === 1) return `<img src="${list[0]}" alt="">`;
-  return '<span class="stack">' + list.map((c, i) => `<img src="${c}" class="${i ? '' : 'live'}" alt="">`).join('') + '</span>'
+  if (list.length === 1) return `<img src="${mediaURL(list[0])}" alt="">`;
+  return '<span class="stack">' + list.map((c, i) => `<img src="${mediaURL(c)}" class="${i ? '' : 'live'}" alt="">`).join('') + '</span>'
     + '<span class="pip">' + list.map((_, i) => `<i class="${i ? '' : 'live'}"></i>`).join('') + '</span>';
 }
 
@@ -1186,6 +1212,7 @@ function plainOf(node){
   return out;
 }
 const txtCache = new Map();
+let txtBytes = 0;
 function chapterText(c){
   if (!c) return '';
   const key = c.id + '|' + (c.updatedAt || 0) + '|' + (c.body || '').length;
@@ -1194,23 +1221,42 @@ function chapterText(c){
   const box = document.createElement('div');
   box.innerHTML = toHTML(c.body);
   const out = plainOf(box).replace(/\n{3,}/g, '\n\n').trim();
-  if (txtCache.size > 500) txtCache.clear();
+  txtBytes += out.length;
+  if (txtBytes > 4e6){ txtCache.clear(); txtBytes = out.length; }   // ~4MB ceiling
   txtCache.set(key, out);
   return out;
 }
 
 /* ---------------- snapshots ---------------- */
+/* Version history is kept beside the story, not inside it — six copies of a
+   chapter in the record meant every autosave cloned all of them. */
+const SNAPS = {};
+let snapT = 0;
+function snapKey(c){ return 'snap:' + c.id; }
+async function loadSnaps(c){
+  if (SNAPS[c.id]) return SNAPS[c.id];
+  if (Array.isArray(c.snaps) && c.snaps.length){    // migrate anything already in the record
+    SNAPS[c.id] = c.snaps;
+    delete c.snaps;
+    Store.pref(snapKey(c), SNAPS[c.id]);
+    return SNAPS[c.id];
+  }
+  SNAPS[c.id] = (await Store.pref(snapKey(c))) || [];
+  return SNAPS[c.id];
+}
 function pushSnap(c, bodyHTML, title){
-  const box = document.createElement('div'); box.innerHTML = bodyHTML || '';
+  if (!c || !bodyHTML || bodyHTML.length > 400000) return;
+  const box = document.createElement('div'); box.innerHTML = bodyHTML;
   const txt = (box.textContent || '').trim();
   if (!txt) return;
-  c.snaps = c.snaps || [];
-  const last = c.snaps[c.snaps.length - 1];
+  const list = SNAPS[c.id] || (SNAPS[c.id] = []);
+  const last = list[list.length - 1];
   if (last && last.body === bodyHTML) return;
-  c.snaps.push({ t: Date.now(), title: title || c.title || '', body: bodyHTML, w: words(txt) });
-  /* image-heavy chapters keep fewer versions, so history can't balloon */
+  list.push({ t: Date.now(), title: title || c.title || '', body: bodyHTML, w: words(txt) });
   const heavy = bodyHTML.length > 120000;
-  while (c.snaps.length > (heavy ? 2 : 6)) c.snaps.shift();
+  while (list.length > (heavy ? 2 : 6)) list.shift();
+  clearTimeout(snapT);
+  snapT = setTimeout(() => Store.pref(snapKey(c), list), 1500);
 }
 
 /* ---------------- daily words ---------------- */
@@ -1394,7 +1440,7 @@ function renderResume(){
   const cover = coversOf(last.s)[0];
   const n = last.s.chapters.indexOf(last.c) + 1;
   box.innerHTML = `<button class="resume" id="resumeGo">
-    <span class="rart">${cover ? `<img src="${cover}" alt="">` : ''}</span>
+    <span class="rart">${cover ? `<img src="${mediaURL(cover)}" alt="">` : ''}</span>
     <span class="rtxt">
       <span class="eyebrow" style="margin:0 0 4px">Continue writing</span>
       <b>${esc(last.c.title || 'Chapter ' + n)}</b>
@@ -1534,7 +1580,7 @@ function renderCover(){
 
   $('#thumbs').innerHTML = list.map((c, i) => `
     <div class="thumb${i ? '' : ' first'}" data-i="${i}">
-      <img src="${c}" alt="">
+      <img src="${mediaURL(c)}" alt="">
       ${i ? '' : '<span class="tag">First</span>'}
       <button class="x" data-rm="${i}" aria-label="Remove cover ${i + 1}">×</button>
     </div>`).join('') + `<button class="thumb add" id="addCover" aria-label="Add cover">+</button>`;
@@ -1546,6 +1592,7 @@ function renderCover(){
   $('#addCover').onclick = () => $('#coverFile').click();
   $('#thumbs').querySelectorAll('[data-rm]').forEach(b => b.onclick = async e => {
     e.stopPropagation();
+    dropMedia(s.covers[+b.dataset.rm]);
     s.covers.splice(+b.dataset.rm, 1);
     renderCover(); await save(); renderShelf();
   });
@@ -1570,7 +1617,7 @@ $('#coverFile').onchange = async e => {
   let ok = 0, heavy = 0;
   for (const f of batch){
     try {
-      S.story.covers.push(await shrink(f, 760));
+      S.story.covers.push(addMedia(await shrink(f, 760)));
       ok++;
       renderCover();                        // show progress instead of freezing
       await save();
@@ -1586,6 +1633,7 @@ $('#coverFile').onchange = async e => {
 $('#dropCover').onclick = () => {
   if (!coversOf(S.story).length) return;
   confirmSheet('Clear every cover?', 'The images go, the story stays.', 'Clear', async () => {
+    (S.story.covers || []).forEach(dropMedia);
     S.story.covers = []; renderCover(); await save(); renderShelf(); toast('Covers cleared');
   });
 };
@@ -1708,7 +1756,7 @@ $('#dupStory').onclick = async () => {
   copy.id = uid();
   copy.title = (src.title || 'Untitled story') + ' (copy)';
   copy.createdAt = copy.updatedAt = Date.now();
-  copy.chapters.forEach(c => { c.id = uid(); c.snaps = []; });
+  copy.chapters.forEach(c => { c.id = uid(); delete c.snaps; });
   (copy.notes || []).forEach(n => n.id = uid());
   copy.readPos = {};
   S.stories.push(copy);
@@ -1744,12 +1792,18 @@ function openEditor(kind, cid){
   $('#fmtDock').classList.remove('on'); $('#eAa').classList.remove('on');
   $('#efootEl').classList.remove('on');
   blankCheck(); syncFmt();
-  S.edOpen = ED().innerHTML;                       // for the session-start snapshot
-  S.edSnapped = false;
+  loadSnaps(S.chapter);
+  const openHTML = ED().innerHTML;
+  S.edOpen = openHTML.length > 400000 ? null : openHTML;   // too big to keep a copy of
+  S.edSnapped = S.edOpen === null;
   S.edSnapT = Date.now();
-  S.edLastW = words(ED().textContent || '');
+  S.edText = ED().textContent || '';
+  S.edLastW = words(S.edText);
+  pendingWrite = false;
+  clearTimeout(eT); eT = 0;
+  clearTimeout(persistT); persistT = 0;
   mark('done');
-  count();
+  count(true);
   $('#v-editor').classList.add('on');
   $('#nav').classList.add('hide');
   $('#frPanel').classList.remove('on');
@@ -1768,8 +1822,18 @@ $('#eBack').onclick = () => { flush(); closeEditor(); };
 function mark(state){
   $('#eSaved').className = 'saved ' + (state === 'dirty' ? 'dirty' : 'done');
 }
-function count(){
+/* Counting walks the whole chapter and runs a regex over it — far too
+   expensive per keystroke on a long chapter. Runs on a trailing debounce. */
+let countT = 0;
+function count(now){
+  clearTimeout(countT);
+  if (now){ countNow(); return; }
+  countT = setTimeout(countNow, 350);
+}
+function countNow(){
+  if (!$('#v-editor').classList.contains('on')) return;
   const t = ED().textContent || '';
+  S.edText = t;
   $('#eCount').textContent = `${nfm(words(t))} words`;
   if (SP.on) spillText();
 }
@@ -1891,6 +1955,7 @@ function syncFmt(){
 }
 function showBubble(){
   const bub = $('#bubble'), sel = getSelection();
+  if (!sel || sel.isCollapsed){ bub.classList.remove('on'); return; }   // cheap exit
   const ok = $('#v-editor').classList.contains('on')
     && sel && sel.rangeCount && !sel.isCollapsed
     && ED().contains(sel.anchorNode)
@@ -1945,10 +2010,14 @@ $('#eAa').onclick = () => {
 };
 function blankCheck(){
   const e = ED();
-  e.classList.toggle('blank', !e.textContent.trim() && !e.querySelector('img'));
+  /* bail before walking the DOM if there's obviously content */
+  let blank = false;
+  if (e.childElementCount <= 1) blank = !e.textContent.trim() && !e.querySelector('img');
+  e.classList.toggle('blank', blank);
 }
 
-let eT;
+let eT = 0, persistT = 0, pendingWrite = false;
+
 function touch(){
   if (!S.edSnapped && S.chapter){
     pushSnap(S.chapter, S.edOpen, S.chapter.title);
@@ -1956,24 +2025,52 @@ function touch(){
   }
   mark('dirty');
   clearTimeout(eT);
-  eT = setTimeout(flush, 700);
+  eT = setTimeout(capture, 1200);          // pull the text out of the DOM
+  if (!persistT) persistT = setTimeout(persist, 4000);   // and write it, less often
 }
-async function flush(){
+
+/* Copy the editor into the chapter object. No sanitising here — the content
+   was already cleaned on paste and on load, so re-parsing the whole chapter
+   every second was pure waste. */
+function capture(){
   if (!S.chapter) return;
   S.chapter.title = $('#eTitle').value;
-  S.chapter.body = clean(ED().innerHTML);
+  S.chapter.body = ED().innerHTML;
   S.chapter.updatedAt = Date.now();
-  const w = words(ED().textContent || '');
+  pendingWrite = true;
+}
+
+async function persist(){
+  clearTimeout(persistT); persistT = 0;
+  if (!S.chapter) return;
+  capture();
+  if (!pendingWrite) return;
+  pendingWrite = false;
+
+  const t = S.edText != null ? S.edText : (ED().textContent || '');
+  const w = words(t);
   if (S.editKind === 'ch' && kindCounts(S.chapter) && w > S.edLastW) addWords(w - S.edLastW);
   S.edLastW = w;
+
   if (S.edSnapped && Date.now() - S.edSnapT > 600000){
     pushSnap(S.chapter, S.chapter.body, S.chapter.title);
     S.edSnapT = Date.now();
   }
+  txtCache.delete(S.chapter.id);
   await save();
   mark('done');
 }
+
+/* everything that used to call flush() still can */
+async function flush(){
+  clearTimeout(eT); eT = 0;
+  countNow();
+  await persist();
+}
+
 ED().addEventListener('input', () => { blankCheck(); count(); touch(); keepCaret(); });
+ED().addEventListener('keydown', e => { if (e.key === 'Enter') keepCaret(true); });
+ED().addEventListener('blur', () => { persist(); });
 ED().addEventListener('paste', e => {
   e.preventDefault();
   const cd = e.clipboardData;
@@ -2018,9 +2115,21 @@ ED().addEventListener('keydown', e => {
   const cmd = k === 'b' ? 'bold' : k === 'i' ? 'italic' : k === 'u' ? 'underline' : null;
   if (cmd){ e.preventDefault(); exec(cmd); }
 });
+/* queryCommandState forces a style recalc per button — twelve of them on every
+   keystroke was a large part of the stutter. Throttled, and skipped entirely
+   when no toolbar is on screen to show the result. */
+let selRAF = 0;
 document.addEventListener('selectionchange', () => {
   if (!$('#v-editor').classList.contains('on')) return;
-  keepRange(); syncFmt(); showBubble();
+  if (selRAF) return;
+  selRAF = requestAnimationFrame(() => {
+    selRAF = 0;
+    keepRange();
+    const sel = getSelection();
+    const showing = sel && sel.rangeCount && !sel.isCollapsed;
+    if (showing || $('#fmtDock').classList.contains('on')) syncFmt();
+    showBubble();
+  });
 });
 $('#escroll').addEventListener('scroll', showBubble, { passive:true });
 window.addEventListener('resize', showBubble);
@@ -2105,7 +2214,7 @@ function proseHTML(body){
 function renderReader(){
   const s = S.story, c = s.chapters[S.readIdx];
   if (!c) return;
-  $('#rBanner').innerHTML = c.banner ? `<img class="rbanner" src="${c.banner}" alt="">` : '';
+  $('#rBanner').innerHTML = c.banner ? `<img class="rbanner" src="${mediaURL(c.banner)}" alt="">` : '';
   $('#rKick').textContent = entryLabel(s, c);
   $('#rTitle').textContent = c.title || 'Untitled chapter';
   $('#rBy').textContent = exportAuthor();
@@ -2288,8 +2397,11 @@ function caretRect(){
   }
   return (rect && (rect.width || rect.height || rect.top)) ? rect : null;
 }
-let caretRAF = 0;
-function keepCaret(){
+let caretRAF = 0, caretLast = 0;
+function keepCaret(force){
+  const now = Date.now();
+  if (!force && now - caretLast < 110) return;    // forces layout; don't do it every frame
+  caretLast = now;
   cancelAnimationFrame(caretRAF);
   caretRAF = requestAnimationFrame(() => {
     if (!$('#v-editor').classList.contains('on')) return;
@@ -2316,7 +2428,7 @@ function renderBanner(){
   const img = S.chapter.banner;
   b.classList.toggle('set', !!img);
   b.innerHTML = img
-    ? `<img src="${img}" alt="">`
+    ? `<img src="${mediaURL(img)}" alt="">`
     : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg><span>Tap to add a header image</span>`;
 }
 $('#eBanner').onclick = () => {
@@ -2328,13 +2440,13 @@ $('#eBanner').onclick = () => {
       <button class="btn sm danger" style="flex:1" id="bnDrop">Remove</button>
     </div>`);
   $('#bnSwap').onclick = () => { closeSheet(); $('#bannerFile').click(); };
-  $('#bnDrop').onclick = async () => { S.chapter.banner = null; renderBanner(); await save(); closeSheet(); };
+  $('#bnDrop').onclick = async () => { dropMedia(S.chapter.banner); S.chapter.banner = null; renderBanner(); await save(); closeSheet(); };
 };
 $('#bannerFile').onchange = async e => {
   const f = e.target.files[0]; e.target.value = '';
   if (!f || !S.chapter) return;
   try {
-    S.chapter.banner = await shrink(f, 1400);
+    S.chapter.banner = addMedia(await shrink(f, 1400));
     S.chapter.updatedAt = Date.now();
     renderBanner(); await save(); toast('Header set');
   } catch (err) {
@@ -2401,7 +2513,8 @@ $('#spPill').onclick = () => {
 /* ---------------- chapter history ---------------- */
 async function historySheet(){
   await flush();
-  const c = S.chapter, snaps = (c.snaps || []).slice().reverse();
+  const c = S.chapter;
+  const snaps = (await loadSnaps(c)).slice().reverse();
   sheet(`<h3>Chapter history</h3>
     <p class="sub">Kept automatically — one when you start editing, another every ten minutes after. Restoring archives the current version first, so nothing is lost either way.</p>
     <div class="chlist">${snaps.length ? snaps.map((sn, i) => {
@@ -2664,7 +2777,7 @@ $('#exportEpub').onclick = () => {
   files.push({ name:'OEBPS/style.css', data:'body{font-family:Georgia,serif;line-height:1.7;margin:5%}h1{font-size:1.5em;text-align:center;margin:2em 0 1.4em}div{margin:0 0 .5em}img.cover{width:100%;height:auto}img{max-width:100%}' });
 
   let coverItem = '', coverMeta = '', coverSpine = '';
-  const cover = coversOf(s)[0];
+  const cover = mediaURL(coversOf(s)[0]);
   const cm = cover && cover.match(/^data:image\/(jpeg|png);base64,/);
   if (cm){
     files.push({ name:'OEBPS/cover.jpg', data:b64u8(cover.split(',')[1]) });
@@ -2680,7 +2793,7 @@ $('#exportEpub').onclick = () => {
   s.chapters.forEach((c, i) => {
     const id = 'ch' + (i + 1), fn = id + '.xhtml';
     const ct = c.title || entryLabel(s, c, epNums);
-    let bodyX = (c.banner ? `<img src="${c.banner}"/>` : '') + xhtmlBody(c.body);
+    let bodyX = (c.banner ? `<img src="${mediaURL(c.banner)}"/>` : '') + xhtmlBody(c.body);
     bodyX = bodyX.replace(/<img src="data:image\/(jpeg|png|gif|webp);base64,([^"]+)"\/>/g, (m, kind, b64) => {
       imgN++;
       const ext = kind === 'jpeg' ? 'jpg' : kind;
@@ -2710,7 +2823,9 @@ $('#exportEpub').onclick = () => {
     '<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>' + coverItem + items.join('') + '</manifest>' +
     '<spine>' + coverSpine + spine.join('') + '</spine></package>' });
 
-  const blob = zipStore(files);
+  let blob;
+  try { blob = zipStore(files); }
+  catch (err){ toast('That story is too large to package'); return; }
   const u = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = u; a.download = slug(title) + '.epub';
@@ -2763,9 +2878,11 @@ let vaultDir = null, vaultBusy = false, vaultT = null;
 function forExport(s){
   const out = {};
   for (const k in s) if (k !== 'chapters') out[k] = s[k];
+  out.covers = (s.covers || []).map(mediaURL).filter(Boolean);   // real images, not keys
   out.chapters = (s.chapters || []).map(c => {
     const cc = {};
     for (const k in c) if (k !== 'snaps') cc[k] = c[k];
+    if (cc.banner) cc.banner = mediaURL(cc.banner);
     return cc;
   });
   return out;
@@ -2788,13 +2905,83 @@ function vaultParts(){
 }
 
 /* --- native (Capacitor) --- */
+/* checkPermissions() reports on READ/WRITE_EXTERNAL_STORAGE, which Android 11+
+   cannot grant at all — it always reads as denied even when All files access IS
+   on. So we ask politely, then just try to write and believe the result. */
 async function nativeGrant(){
   const fs = FS(); if (!fs) return false;
-  try {
-    let st = await fs.checkPermissions();
-    if (st && st.publicStorage !== 'granted') st = await fs.requestPermissions();
-    return !st || st.publicStorage === 'granted';
-  } catch { return true; }        // platforms without a permission gate just allow it
+  try { await fs.requestPermissions(); } catch {}   // no-op on modern Android, needed on old
+  return await nativeWrite();                       // the write is the test
+}
+
+/* Ask the plugin what it can actually do, and show the answer. */
+async function probeStorage(){
+  const rows = [];
+  rows.push(['User agent', (navigator.userAgent || '').slice(0, 120)]);
+  rows.push(['Capacitor bridge', window.Capacitor ? 'present' : 'MISSING']);
+  const fs = FS();
+  rows.push(['Filesystem plugin', fs ? 'present' : 'MISSING']);
+  if (!fs){
+    rows.push(['Verdict', 'No native filesystem — the build has no plugin compiled in.']);
+    return rows;
+  }
+  try { rows.push(['checkPermissions', JSON.stringify(await fs.checkPermissions())]); }
+  catch (e){ rows.push(['checkPermissions', 'threw: ' + (e && e.message || e)]); }
+
+  let anyOK = null;
+  for (const dir of DIRS){
+    const path = (dir === 'EXTERNAL_STORAGE' ? 'Documents/' : '') + VAULT_DIR + '/probe.txt';
+    try {
+      await fs.writeFile({ path, directory:dir, encoding:'utf8', data:'ok', recursive:true });
+      let where = '';
+      try { where = (await fs.getUri({ path, directory:dir })).uri || ''; } catch {}
+      rows.push([dir, 'WRITE OK' + (where ? '  ' + where : '')]);
+      if (!anyOK) anyOK = dir;
+      try { await fs.deleteFile({ path, directory:dir }); } catch {}
+    } catch (e){
+      rows.push([dir, 'failed — ' + String(e && e.message || e).slice(0, 90)]);
+    }
+  }
+  rows.push(['Verdict', anyOK
+    ? `Can write to ${anyOK}${DIR_SURVIVES[anyOK] ? ' — survives uninstall' : ' — erased on uninstall'}`
+    : 'No writable location. Grant All files access in Android settings, then retry.']);
+  return rows;
+}
+
+function storageHelp(){
+  sheet(`<h3>Turning on file access</h3>
+    <p class="sub">Android 11 and newer don't use a pop-up for this. It lives in settings, and it's called <b>All files access</b>.</p>
+    <ol style="color:var(--muted);font-size:13.5px;line-height:1.9;padding-left:20px;margin:0 0 18px">
+      <li>Android <b>Settings</b> → <b>Apps</b> → <b>Locust</b></li>
+      <li><b>Permissions</b> → <b>Files and media</b>, or <b>Special app access</b> → <b>All files access</b></li>
+      <li>Turn it on for Locust</li>
+      <li>Come back here and tap <b>Try again</b></li>
+    </ol>
+    <button class="btn pri block" id="shRetry">Try again</button>
+    <button class="btn ghost block" id="shDiag" style="margin-top:9px">Run a storage check</button>`);
+  $('#shRetry').onclick = async () => {
+    closeSheet();
+    const ok = await vaultEnable();
+    toast(ok ? 'Storage is on' : 'Still no access');
+    renderVault();
+  };
+  $('#shDiag').onclick = diagSheet;
+}
+
+async function diagSheet(){
+  sheet(`<h3>Storage check</h3><p class="sub">Probing…</p>`);
+  const rows = await probeStorage();
+  const text = rows.map(([k, v]) => k + ': ' + v).join('\n');
+  sheet(`<h3>Storage check</h3>
+    <div style="background:var(--void);border:1px solid var(--line-soft);border-radius:12px;
+                padding:12px;font-size:11.5px;line-height:1.65;white-space:pre-wrap;
+                word-break:break-word;max-height:46vh;overflow:auto;color:var(--muted)">${esc(text)}</div>
+    <button class="btn pri block" id="dgCopy" style="margin-top:14px">Copy this</button>
+    <button class="btn ghost block" id="dgClose" style="margin-top:9px">Close</button>`);
+  $('#dgCopy').onclick = async () => {
+    toast((await copyPlain(text)) ? 'Copied' : "Couldn't copy");
+  };
+  $('#dgClose').onclick = closeSheet;
 }
 /* Ordered best-to-worst. EXTERNAL_STORAGE and DOCUMENTS outlive an uninstall;
    EXTERNAL and DATA do not, but at least survive app updates. */
@@ -2900,11 +3087,15 @@ async function absorb(d, replace){
     s.tags = s.tags || [];
     if (!s.covers) s.covers = s.cover ? [s.cover] : [];
     delete s.cover;
+    s.covers = s.covers.map(v => isData(v) ? addMedia(v) : v);
+    s.chapters.forEach(c => { if (isData(c.banner)) c.banner = addMedia(c.banner); });
     await Store.put(s);
   }
   if (d.stats) for (const k in d.stats) S.stats[k] = Math.max(S.stats[k] || 0, d.stats[k] || 0);
   await Store.pref('stats', S.stats);
   if (d.profile){
+    if (isData(d.profile.avatar)) d.profile.avatar = addMedia(d.profile.avatar);
+    if (isData(d.profile.banner)) d.profile.banner = addMedia(d.profile.banner);
     S.profile = replace ? Object.assign({ accent:'iris' }, d.profile) : Object.assign(S.profile, d.profile);
     await Store.pref('profile', S.profile);
     applyAccent(S.profile.accent);
@@ -2913,7 +3104,7 @@ async function absorb(d, replace){
   S.stories = all.filter(x => !x.deletedAt);
   S.trash = all.filter(x => x.deletedAt);
   S.story = null; S.chapter = null;
-  txtCache.clear();
+  txtCache.clear(); txtBytes = 0;
   return d.stories.length;
 }
 
@@ -2921,8 +3112,14 @@ async function absorb(d, replace){
 async function vaultEnable(){
   const mode = vaultMode();
   if (mode === 'native'){
-    if (!(await nativeGrant())) { toast('Storage permission denied'); return false; }
-    S.vaultOn = true;
+    S.vaultOn = true;                       // so the write path isn't switched off before we test it
+    const wrote = await nativeGrant();
+    if (!wrote){
+      S.vaultOn = false;
+      await Store.pref('vaultOn', false);
+      storageHelp();                        // Android 11+ needs the settings toggle
+      return false;
+    }
     await Store.pref('vaultOn', true);
     const existing = await nativeRead();
     if (existing && existing.stories && existing.stories.length && !S.stories.length){
@@ -3039,7 +3236,8 @@ function renderVault(){
       : 'Saving works, but this location is erased if you uninstall. Grant All files access in Android settings to move it somewhere permanent.';
     row.innerHTML = `<button class="btn sm" id="vNow">Save now</button>
       <button class="btn sm ghost" id="vExport">Export a copy</button>
-      <button class="btn sm ghost" id="vImport">Import a file</button>`;
+      <button class="btn sm ghost" id="vImport">Import a file</button>
+      <button class="btn sm ghost" id="vDiag">Storage check</button>`;
   } else if (mode === 'none'){
     stat.className = stale !== null && stale < 7 ? 'vstat' : 'vstat warn';
     stat.innerHTML = `<span class="dot"></span><div><b>Manual copies</b>
@@ -3048,7 +3246,8 @@ function renderVault(){
       ? 'This app build gives Locust no folder it can write to on its own, so a saved copy is what survives an uninstall. It lands in your Downloads.'
       : 'A browser tab cannot write to your device folders. Save a copy and keep it somewhere safe.';
     row.innerHTML = `<button class="btn pri sm" id="vExport">Save a copy</button>
-      <button class="btn sm" id="vImport">Load a copy</button>`;
+      <button class="btn sm" id="vImport">Load a copy</button>
+      <button class="btn sm ghost" id="vDiag">Storage check</button>`;
   } else {
     stat.className = 'vstat warn';
     stat.innerHTML = `<span class="dot"></span><div><b>Off</b>
@@ -3056,14 +3255,18 @@ function renderVault(){
     $('#vaultWhat').textContent = 'Turn this on and Locust keeps a live copy on the device that outlives the app itself.';
     row.innerHTML = `<button class="btn pri sm" id="vOn">Turn on device storage</button>
       <button class="btn sm ghost" id="vExport">Export a copy</button>
-      <button class="btn sm ghost" id="vImport">Import a file</button>`;
+      <button class="btn sm ghost" id="vImport">Import a file</button>
+      <button class="btn sm ghost" id="vDiag">Storage check</button>`;
   }
 
   if ($('#vOn')) $('#vOn').onclick = () => askVault(true);
   if ($('#vNow')) $('#vNow').onclick = async () => {
-    toast((await vaultSync()) ? 'Saved to the device' : 'Could not write — turn it on again');
+    const ok = await vaultSync();
+    toast(ok ? 'Saved to the device' : 'Could not write');
+    if (!ok) storageHelp();
     renderVault();
   };
+  if ($('#vDiag')) $('#vDiag').onclick = diagSheet;
   if ($('#vExport')) $('#vExport').onclick = exportVault;
   if ($('#vImport')) $('#vImport').onclick = () => $('#vaultFile').click();
 
@@ -3136,9 +3339,9 @@ function renderProfileCard(){
   $('#pfHandleBig').textContent = handleOf();
   $('#pfAboutBig').textContent = S.profile.line || 'Nothing here yet.';
   $('#pfAvatar').innerHTML = S.profile.avatar
-    ? `<img src="${S.profile.avatar}" alt="">`
+    ? `<img src="${mediaURL(S.profile.avatar)}" alt="">`
     : esc(initials());
-  $('#pfBanner').innerHTML = S.profile.banner ? `<img src="${S.profile.banner}" alt="">` : '';
+  $('#pfBanner').innerHTML = S.profile.banner ? `<img src="${mediaURL(S.profile.banner)}" alt="">` : '';
   $('#pfSince').textContent = new Date(S.profile.since || Date.now())
     .toLocaleDateString(undefined, { month:'long', year:'numeric' });
   renderBadges();
@@ -3208,7 +3411,7 @@ $('#pfBanner').onclick = () => {
 $('#pfBannerFile').onchange = async e => {
   const f = e.target.files[0]; e.target.value = '';
   if (!f) return;
-  try { S.profile.banner = await shrink(f, 1000); renderProfileCard(); saveProfile(); }
+  try { S.profile.banner = addMedia(await shrink(f, 1000)); renderProfileCard(); saveProfile(); }
   catch { toast("Couldn't read that image"); }
 };
 $('#pfAuthor').oninput = e => { S.profile.author = e.target.value; saveProfile(); };
@@ -3223,7 +3426,7 @@ $('#pfAvatar').onclick = () => {
 $('#pfAvatarFile').onchange = async e => {
   const f = e.target.files[0]; e.target.value = '';
   if (!f) return;
-  try { S.profile.avatar = await shrink(f, 400); renderProfileCard(); saveProfile(); }
+  try { S.profile.avatar = addMedia(await shrink(f, 400)); renderProfileCard(); saveProfile(); }
   catch { toast("Couldn't read that image"); }
 };
 $('#pfBackupGo').onclick = () => $('#backup').click();
@@ -3346,6 +3549,7 @@ history.pushState({ trap:1 }, '');
   S.opts.sort = (await Store.pref('sort')) || 'Recent';
   const pf = await Store.pref('profile');
   if (pf) S.profile = Object.assign(S.profile, pf);
+  MEDIA = (await Store.pref('media')) || {};
   S.vaultAt = (await Store.pref('vaultAt')) || 0;
   S.vaultOn = !!(await Store.pref('vaultOn'));
   vaultDirName = (await Store.pref('vaultDirName')) || null;
@@ -3391,13 +3595,13 @@ history.pushState({ trap:1 }, '');
   });
   renderShelf();
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden' && S.vaultOn){ clearTimeout(vaultT); vaultSync(); }
+    if (document.visibilityState === 'hidden'){
+      if (S.chapter && $('#v-editor').classList.contains('on')) persist();
+      if (S.vaultOn){ clearTimeout(vaultT); vaultSync(); }
+    }
   });
   window.addEventListener('beforeunload', () => {
-    if (S.chapter && $('#v-editor').classList.contains('on')){
-      S.chapter.title = $('#eTitle').value;
-      S.chapter.body = clean(ED().innerHTML);
-    }
+    if (S.chapter && $('#v-editor').classList.contains('on')) capture();
   });
 })();
 </script>
