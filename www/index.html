@@ -246,7 +246,9 @@ textarea.inp{resize:vertical;min-height:92px;line-height:1.6}
   border-radius:14px;padding:13px 13px 13px 15px;
   animation:tileIn .34s var(--ease) both;
 }
-.ch .n{font-family:var(--display);font-size:13px;color:var(--faint);width:22px;flex:none;font-weight:700}
+.ch .n{font-family:var(--display);font-size:13px;color:var(--faint);width:26px;flex:none;font-weight:700}
+.ch .n .alt{font-family:var(--ui);font-size:8.5px;font-weight:700;letter-spacing:.04em;
+  color:var(--iris-soft);display:block}
 .ch .body{flex:1;min-width:0}
 .ch .body b{display:block;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ch .body span{font-size:11.5px;color:var(--faint)}
@@ -1334,13 +1336,13 @@ function renderShelf(){
                       (a,b) => b.updatedAt - a.updatedAt);
   $('#sortSeg').style.display = '';
   box.innerHTML = '<div class="shelf">' + list.map((s, i) => {
-    const w = s.chapters.reduce((n, c) => n + words(chapterText(c)), 0);
+    const w = storyWords(s);
     return `<button class="tile" data-id="${s.id}" style="animation-delay:${i * 45}ms">
       <div class="art">
         ${stackHTML(coversOf(s))}
       </div>
       <h3>${esc(s.title || 'Untitled story')}</h3>
-      <p>${s.chapters.length} ch · ${nfm(w)} words</p>
+      <p>${chapterCount(s)} ch · ${nfm(w)} words</p>
       ${s.goal > 0 ? `<div class="goalbar"><i style="width:${Math.min(100, Math.round(w / s.goal * 100))}%"></i></div>` : ''}
     </button>`;
   }).join('') + '</div>';
@@ -1387,6 +1389,38 @@ async function newStory(){
   setTimeout(() => $('#sTitle').focus(), 340);
 }
 $('#newStory').onclick = newStory;
+
+/* ---------------- entry kinds ----------------
+   Only 'chapter' entries take a number, so a prologue or an A/N sitting in
+   front of chapter one doesn't push it to two. */
+const KINDS = {
+  chapter:  { label:'Chapter',        short:'',    counts:true  },
+  prologue: { label:'Prologue',       short:'PRO', counts:true  },
+  epilogue: { label:'Epilogue',       short:'EPI', counts:true  },
+  bio:      { label:'Bio',            short:'BIO', counts:true  },
+  note:     { label:"Author's note",  short:'A/N', counts:false }
+};
+const KIND_ORDER = ['chapter','prologue','epilogue','bio','note'];
+const kindOf = c => (c && KINDS[c.kind]) ? c.kind : 'chapter';
+const kindCounts = c => KINDS[kindOf(c)].counts;
+
+/* id -> printed chapter number, numbering only the chapters */
+function chapterNumbers(s){
+  const map = {}; let n = 0;
+  (s.chapters || []).forEach(c => { if (kindOf(c) === 'chapter') map[c.id] = ++n; });
+  return map;
+}
+function entryLabel(s, c, nums){
+  const k = kindOf(c);
+  if (k !== 'chapter') return KINDS[k].label;
+  const n = (nums || chapterNumbers(s))[c.id];
+  return n ? 'Chapter ' + n : 'Chapter';
+}
+/* words in a story, ignoring anything marked as not counting */
+function storyWords(s){
+  return (s.chapters || []).reduce((n, c) => n + (kindCounts(c) ? words(chapterText(c)) : 0), 0);
+}
+const chapterCount = s => (s.chapters || []).filter(c => kindOf(c) === 'chapter').length;
 
 /* ---------------- story ---------------- */
 const CATS  = ['Fanfiction','Original','Reader-insert','Web novel','Short story','Poetry'];
@@ -1563,16 +1597,24 @@ $('#addPh').onclick = async () => { S.story.placeholders.push({ k:'', v:'' }); r
 /* chapters */
 function renderChapters(){
   const s = S.story, box = $('#chList');
-  const total = s.chapters.reduce((n, c) => n + words(chapterText(c)), 0);
-  $('#chSummary').textContent = `${s.chapters.length} chapter${s.chapters.length === 1 ? '' : 's'} · ${nfm(total)} words`
+  const total = storyWords(s);
+  const nCh = chapterCount(s), extra = s.chapters.length - nCh;
+  $('#chSummary').textContent = `${nCh} chapter${nCh === 1 ? '' : 's'}`
+    + (extra ? ` · ${extra} extra${extra === 1 ? '' : 's'}` : '')
+    + ` · ${nfm(total)} words`
     + (s.goal > 0 ? ` · ${Math.min(999, Math.round(total / s.goal * 100))}% of ${nfm(s.goal)}` : '');
 
-  box.innerHTML = s.chapters.map((c, i) => `
+  const nums = chapterNumbers(s);
+  box.innerHTML = s.chapters.map((c, i) => {
+    const k = kindOf(c), meta = KINDS[k];
+    const mark = k === 'chapter' ? (nums[c.id] || '') : `<span class="alt">${meta.short}</span>`;
+    const wc = kindCounts(c) ? `${nfm(words(chapterText(c)))} words` : 'not counted';
+    return `
     <div class="ch" style="animation-delay:${i * 35}ms">
-      <span class="n">${i + 1}</span>
+      <span class="n">${mark}</span>
       <button class="body" data-open="${c.id}" style="text-align:left">
-        <b>${esc(c.title || 'Untitled chapter')}</b>
-        <span>${nfm(words(chapterText(c)))} words · ${ago(c.updatedAt)}</span>
+        <b>${esc(c.title || entryLabel(s, c, nums))}</b>
+        <span>${k === 'chapter' ? '' : esc(meta.label) + ' · '}${wc} · ${ago(c.updatedAt)}</span>
       </button>
       <div class="acts">
         <button class="icb" data-up="${i}" aria-label="Move up" ${i === 0 ? 'disabled style="opacity:.25"' : ''}>
@@ -1584,14 +1626,15 @@ function renderChapters(){
         <button class="icb warn" data-del="${i}" aria-label="Delete chapter">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg></button>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   box.querySelectorAll('[data-open]').forEach(b => b.onclick = () => openEditor('ch', b.dataset.open));
   box.querySelectorAll('[data-up]').forEach(b => b.onclick = () => move(+b.dataset.up, -1));
   box.querySelectorAll('[data-down]').forEach(b => b.onclick = () => move(+b.dataset.down, 1));
   box.querySelectorAll('[data-dup]').forEach(b => b.onclick = async () => {
     const i = +b.dataset.dup, c = S.story.chapters[i];
-    S.story.chapters.splice(i + 1, 0, { id: uid(), title: (c.title || 'Untitled chapter') + ' (copy)', body: c.body, banner: c.banner || null, updatedAt: Date.now() });
+    S.story.chapters.splice(i + 1, 0, { id: uid(), kind: kindOf(c), title: (c.title || 'Untitled chapter') + ' (copy)', body: c.body, banner: c.banner || null, updatedAt: Date.now() });
     renderChapters(); await save(); toast('Chapter duplicated');
   });
   box.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
@@ -1610,7 +1653,7 @@ async function move(i, d){
   renderChapters(); await save();
 }
 $('#addCh').onclick = async () => {
-  const c = { id:uid(), title:'Chapter ' + (S.story.chapters.length + 1), body:'', updatedAt:Date.now() };
+  const c = { id:uid(), kind:'chapter', title:'Chapter ' + (chapterCount(S.story) + 1), body:'', updatedAt:Date.now() };
   S.story.chapters.push(c);
   renderChapters(); await save();
   openEditor('ch', c.id);
@@ -1878,7 +1921,7 @@ async function flush(){
   S.chapter.body = clean(ED().innerHTML);
   S.chapter.updatedAt = Date.now();
   const w = words(ED().textContent || '');
-  if (S.editKind === 'ch' && w > S.edLastW) addWords(w - S.edLastW);
+  if (S.editKind === 'ch' && kindCounts(S.chapter) && w > S.edLastW) addWords(w - S.edLastW);
   S.edLastW = w;
   if (S.edSnapped && Date.now() - S.edSnapT > 600000){
     pushSnap(S.chapter, S.chapter.body, S.chapter.title);
@@ -2019,7 +2062,7 @@ function renderReader(){
   const s = S.story, c = s.chapters[S.readIdx];
   if (!c) return;
   $('#rBanner').innerHTML = c.banner ? `<img class="rbanner" src="${c.banner}" alt="">` : '';
-  $('#rKick').textContent = `Chapter ${S.readIdx + 1}`;
+  $('#rKick').textContent = entryLabel(s, c);
   $('#rTitle').textContent = c.title || 'Untitled chapter';
   $('#rBy').textContent = exportAuthor();
   $('#rStoryName').textContent = s.title || 'Untitled story';
@@ -2058,12 +2101,13 @@ function openReader(i){
 }
 $('#rWhere').onclick = () => {
   const s = S.story;
+  const jnums = chapterNumbers(s);
   sheet(`<h3>Chapters</h3><p class="sub">${esc(s.title || 'Untitled story')}</p>
     <div class="chlist">${s.chapters.map((c, i) => `
       <button class="ch" data-jump="${i}" style="text-align:left${i === S.readIdx ? ';border-color:rgba(var(--iris-rgb),.45)' : ''}">
-        <span class="n">${i + 1}</span>
-        <span class="body"><b>${esc(c.title || 'Untitled chapter')}</b>
-        <span>${nfm(words(chapterText(c)))} words</span></span>
+        <span class="n">${kindOf(c) === 'chapter' ? (jnums[c.id] || '') : `<span class="alt">${KINDS[kindOf(c)].short}</span>`}</span>
+        <span class="body"><b>${esc(c.title || entryLabel(s, c, jnums))}</b>
+        <span>${esc(entryLabel(s, c, jnums))}${kindCounts(c) ? ' · ' + nfm(words(chapterText(c))) + ' words' : ''}</span></span>
       </button>`).join('')}</div>`);
   $('#sheet').querySelectorAll('[data-jump]').forEach(b => b.onclick = () => {
     ttsStop(); queue();
@@ -2097,10 +2141,27 @@ function deleteCurrent(){
       await save(); closeEditor(); toast('Deleted');
     });
 }
+function typeSheet(){
+  const c = S.chapter;
+  sheet(`<h3>What is this?</h3>
+    <p class="sub">Only chapters get numbered. An author's note is never counted in your word totals.</p>
+    <div class="seg" id="kindSeg"></div>`);
+  renderSeg($('#kindSeg'), KIND_ORDER.map(k => KINDS[k].label), KINDS[kindOf(c)].label, async label => {
+    const key = KIND_ORDER.find(k => KINDS[k].label === label) || 'chapter';
+    c.kind = key;
+    c.updatedAt = Date.now();
+    await save();
+    renderChapters();
+    toast(KINDS[key].label);
+    setTimeout(closeSheet, 260);
+  });
+}
 $('#eMore').onclick = () => {
   const items = [];
   if (S.editKind !== 'note')
     items.push({ label:'Read as reader', fn: async () => { await flush(); openReader(S.story.chapters.indexOf(S.chapter)); } });
+  if (S.editKind !== 'note')
+    items.push({ label:`Type · ${KINDS[kindOf(S.chapter)].label}`, fn: typeSheet });
   items.push({ label:'Find & replace', fn: findSheet });
   items.push(SP.on
     ? { label:'End sprint', fn: () => $('#spPill').click() }
@@ -2153,7 +2214,7 @@ function renderSearch(q){
     ? `<p class="sub" style="margin:2px 0 12px">${rows.length} hit${rows.length === 1 ? '' : 's'} for “${esc(q)}”</p><div class="chlist">`
       + rows.slice(0, 40).map((r, i) => `
         <button class="ch" data-ss="${r.s.id}" data-sc="${r.c.id}" style="text-align:left;animation-delay:${i * 25}ms">
-          <span class="n">${r.ci + 1}</span>
+          <span class="n">${(chapterNumbers(r.s)[r.c.id]) || '·'}</span>
           <span class="body"><b>${esc(r.title)} · ${esc(r.s.title || 'Untitled story')}</b>
           <span style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.peek || '—'}</span></span>
         </button>`).join('') + '</div>'
@@ -2422,7 +2483,7 @@ $('.rbody').addEventListener('scroll', () => {
 /* ---------------- desk ---------------- */
 function renderDesk(){
   let ch = 0, w = 0;
-  S.stories.forEach(s => { ch += s.chapters.length; s.chapters.forEach(c => w += words(chapterText(c))); });
+  S.stories.forEach(s => { ch += chapterCount(s); w += storyWords(s); });
   $('#stStories').textContent = nfm(S.stories.length);
   $('#stChapters').textContent = nfm(ch);
   $('#stWords').textContent = nfm(w);
@@ -2500,7 +2561,7 @@ function renderDesk(){
   }
   box.innerHTML = '<div class="chlist">' + recent.slice(0, 4).map((r, i) => `
     <button class="ch" data-s="${r.s.id}" data-c="${r.c.id}" style="text-align:left;animation-delay:${i * 40}ms">
-      <span class="n">${r.s.chapters.indexOf(r.c) + 1}</span>
+      <span class="n">${(chapterNumbers(r.s)[r.c.id]) || '·'}</span>
       <span class="body"><b>${esc(r.c.title || 'Untitled chapter')}</b>
       <span>${esc(r.s.title || 'Untitled story')} · ${ago(r.c.updatedAt)}</span></span>
     </button>`).join('') + '</div>';
@@ -2571,9 +2632,10 @@ $('#exportEpub').onclick = () => {
 
   const items = [], spine = [], navLis = [];
   let imgN = 0;
+  const epNums = chapterNumbers(s);
   s.chapters.forEach((c, i) => {
     const id = 'ch' + (i + 1), fn = id + '.xhtml';
-    const ct = c.title || ('Chapter ' + (i + 1));
+    const ct = c.title || entryLabel(s, c, epNums);
     let bodyX = (c.banner ? `<img src="${c.banner}"/>` : '') + xhtmlBody(c.body);
     bodyX = bodyX.replace(/<img src="data:image\/(jpeg|png|gif|webp);base64,([^"]+)"\/>/g, (m, kind, b64) => {
       imgN++;
@@ -2956,8 +3018,8 @@ function badges(){
     imgs += coversOf(s).length;
     s.chapters.forEach(c => {
       const t = chapterText(c);
-      if (t) chs++;
-      w += words(t);
+      if (t && kindOf(c) === 'chapter') chs++;
+      if (kindCounts(c)) w += words(t);
       if (c.banner) imgs++;
       imgs += ((c.body || '').match(/<img /g) || []).length;
     });
@@ -3034,7 +3096,7 @@ async function renderProfile(){
       chs++;
       if (c.banner) imgs++;
       imgs += ((c.body || '').match(/<img /g) || []).length;
-      w += words(chapterText(c));
+      if (kindCounts(c)) w += words(chapterText(c));
     });
   });
   $('#pfStore').textContent =
@@ -3110,8 +3172,12 @@ $('#exportOne').onclick = () => {
   md += `*by ${exportAuthor()}*\n\n`;
   if (s.description) md += `> ${s.description}\n\n`;
   md += `*${s.category}*` + (s.tags?.length ? ` · ${s.tags.join(', ')}` : '') + `\n\n---\n\n`;
-  s.chapters.forEach((c, i) => {
-    md += `## ${i + 1}. ${c.title || 'Untitled chapter'}\n\n${htmlToMd(c.body)}\n\n`;
+  const mdNums = chapterNumbers(s);
+  s.chapters.forEach(c => {
+    const head = kindOf(c) === 'chapter'
+      ? `${mdNums[c.id]}. ${c.title || 'Untitled chapter'}`
+      : `${KINDS[kindOf(c)].label}${c.title ? ' — ' + c.title : ''}`;
+    md += `## ${head}\n\n${htmlToMd(c.body)}\n\n`;
   });
   download(slug(s.title) + '.md', md, 'text/markdown;charset=utf-8');
   toast('Exported');
