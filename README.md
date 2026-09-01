@@ -1,52 +1,23 @@
-# Locust — Android build
+# Locust
 
-A real Capacitor app, so `@capacitor/filesystem` is compiled in and Android's
-storage permission actually works. Your writing is saved to
-`Documents/Locust/locust-vault.json`, which survives uninstalling the app.
+Locust is being rebuilt as a native Android writing app.
 
-## Route A — build in the cloud (no Android Studio)
+## Current Android product
 
-1. Make a new GitHub repository and upload every file in this folder.
-2. Open the **Actions** tab, pick **Build Locust APK**, press **Run workflow**.
-3. Wait about 5 minutes. Download `locust-apk` from the finished run.
-4. Unzip it and install `app-debug.apk` on your phone.
+The new product lives in `native-android/` and uses Kotlin, Jetpack Compose, and Room/SQLite. It is **not** a Capacitor/WebView wrapper. Stories, chapters, and profile data are native app data. User-selected backups can use Android's document picker.
 
-Everything is already configured. You need a GitHub account and nothing else.
+The existing `www/` HTML implementation and Capacitor files are retained as the original prototype/reference and are not used by the native Android build.
 
-## Route B — build on your own machine
+## Build an APK with GitHub
 
-Requires Node and Android Studio.
+Every push that changes `native-android/` runs **Build Locust Native Android** in GitHub Actions. When it finishes, open the workflow run and download the `locust-native-debug-apk` artifact.
 
-```bash
-npm install
-npx cap add android
-npx cap sync android
-npx cap open android      # then press Run in Android Studio
-```
+You can also run the workflow manually from the Actions tab.
 
-Or without opening the IDE:
+## Development
 
-```bash
-cd android && ./gradlew assembleDebug
-# APK lands in android/app/build/outputs/apk/debug/
-```
+Open `native-android/` as the Android Studio project. The app package is `com.locust.app`.
 
-## Updating the app later
+## Direction
 
-Replace `www/index.html`, then re-run the workflow (Route A) or
-`npx cap sync android && cd android && ./gradlew assembleDebug` (Route B).
-
-## Changing the app identity
-
-Edit `capacitor.config.json`. `appId` cannot change once you've published
-to a store, so decide on it now if that matters.
-
-## Icon
-
-`resources/icon.png` is your logo at 512px. To generate every Android icon
-size from it:
-
-```bash
-npm i -D @capacitor/assets
-npx capacitor-assets generate --android
-```
+The native rebuild is intended to make Locust feel like a real Android application: native persistence, native file picking, proper lifecycle behavior, and a foundation that can later support richer editing without browser-storage or Capacitor permission workarounds.

@@ -1,59 +1,38 @@
-name: Build Locust APK
+name: Build Locust Native Android
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'native-android/**'
+      - '.github/workflows/android.yml'
   workflow_dispatch:
 
 jobs:
-  apk:
-    name: apk
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Get the code
+      - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-
-      - name: Set up the Android SDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-
-      - name: Accept SDK licences
-        run: yes | sdkmanager --licenses || true
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Add the Android platform
-        run: npx cap add android
-
-      - name: Request full file access
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-37" "build-tools;35.0.0"
+      - name: Install Gradle
         run: |
-          f=android/app/src/main/AndroidManifest.xml
-          grep -q MANAGE_EXTERNAL_STORAGE "$f" || sed -i \
-            's#<application#<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n    <application#' "$f"
-          echo "----- manifest -----"; cat "$f"
-
-      - name: Copy the web app in
-        run: npx cap sync android
-
-      - name: Build
-        run: |
-          chmod +x android/gradlew
-          cd android && ./gradlew assembleDebug --no-daemon
-
-      - name: Upload the APK
+          curl -fsSL https://services.gradle.org/distributions/gradle-9.6.1-bin.zip -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /tmp
+      - name: Build native APK
+        working-directory: native-android
+        run: /tmp/gradle-9.6.1/bin/gradle assembleDebug --no-daemon
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: locust-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: locust-native-debug-apk
+          path: native-android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
