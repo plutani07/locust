@@ -1,0 +1,64 @@
+name: Build Locust APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    name: apk
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up the Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept SDK licences
+        run: yes | sdkmanager --licenses || true
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Add the Android platform
+        run: npx cap add android
+
+      - name: Request full file access
+        run: |
+          f=android/app/src/main/AndroidManifest.xml
+          grep -q MANAGE_EXTERNAL_STORAGE "$f" || sed -i \
+            's#<application#<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n    <application#' "$f"
+          echo "----- manifest -----"; cat "$f"
+
+      - name: Generate app icons
+        run: |
+          npm i -D @capacitor/assets
+          npx capacitor-assets generate --android --iconBackgroundColor '#08090F' --iconBackgroundColorDark '#08090F' || echo "icon generation skipped"
+
+      - name: Copy the web app in
+        run: npx cap sync android
+
+      - name: Build
+        run: |
+          chmod +x android/gradlew
+          cd android && ./gradlew assembleDebug --no-daemon
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: locust-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
