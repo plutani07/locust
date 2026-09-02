@@ -1,0 +1,121 @@
+name: Build Locust APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    name: apk
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up the Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept SDK licences
+        run: yes | sdkmanager --licenses || true
+
+      - name: Restore the signing key
+        run: |
+          mkdir -p ~/.android
+          if [ -n "${{ secrets.LOCUST_KEYSTORE }}" ]; then
+            echo "${{ secrets.LOCUST_KEYSTORE }}" | base64 -d > ~/.android/debug.keystore
+            echo "Using the committed signing key — this APK will update in place."
+          else
+            echo "::warning::LOCUST_KEYSTORE secret is missing. This build gets a throwaway key,"
+            echo "::warning::so it will NOT install over your existing app."
+          fi
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Add the Android platform
+        run: npx cap add android
+
+      - name: Generate app icons and splash images
+        run: |
+          npm i -D @capacitor/assets
+          npx capacitor-assets generate --android \
+            --iconBackgroundColor '#08090F' --iconBackgroundColorDark '#08090F' \
+            --splashBackgroundColor '#08090F' --splashBackgroundColorDark '#08090F' \
+            || echo "asset generation skipped"
+
+      # The very first frame Android paints is the activity's window
+      # background, before the WebView exists. Left at its default that flashes
+      # white, so point it at the splash drawable and the app opens on the
+      # mark instead. `cap add android` regenerates these files every build,
+      # which is why this is a workflow step and not a committed edit.
+      - name: Make the launch window match the splash
+        run: |
+          python3 - <<'PY'
+          import re, pathlib
+          res = pathlib.Path('android/app/src/main/res')
+          styles = res / 'values' / 'styles.xml'
+          s = styles.read_text()
+
+          if 'AppTheme.NoActionBarLaunch' in s:
+              # ensure the launch theme paints the splash, not white
+              def fix(m):
+                  body = m.group(2)
+                  body = re.sub(r'\s*<item name="android:(background|windowBackground)">[^<]*</item>', '', body)
+                  return (m.group(1) + body.rstrip()
+                          + '\n        <item name="android:background">@drawable/splash</item>'
+                          + '\n        <item name="android:windowBackground">@drawable/splash</item>\n    '
+                          + m.group(3))
+              s = re.sub(r'(<style name="AppTheme.NoActionBarLaunch"[^>]*>)(.*?)(</style>)', fix, s, flags=re.S)
+          else:
+              s = s.replace('</resources>',
+                  '    <style name="AppTheme.NoActionBarLaunch" parent="AppTheme.NoActionBar">\n'
+                  '        <item name="android:background">@drawable/splash</item>\n'
+                  '        <item name="android:windowBackground">@drawable/splash</item>\n'
+                  '    </style>\n</resources>')
+          styles.write_text(s)
+          print(s)
+
+          man = res.parent / 'AndroidManifest.xml'
+          m = man.read_text()
+          if 'AppTheme.NoActionBarLaunch' not in m:
+              m = m.replace('<activity', '<activity android:theme="@style/AppTheme.NoActionBarLaunch"', 1)
+              man.write_text(m)
+              print('manifest patched')
+          PY
+
+      - name: Copy the web app in
+        run: npx cap sync android
+
+      - name: Build
+        run: |
+          chmod +x android/gradlew
+          cd android && ./gradlew assembleDebug --no-daemon
+
+      - name: Show what actually signed this APK
+        run: |
+          APK=$(find . -name '*-debug.apk' | head -1)
+          SIGNER=$(ls -d $ANDROID_HOME/build-tools/*/ | tail -1)apksigner
+          echo "APK: $APK"
+          "$SIGNER" verify --print-certs "$APK" | grep -i "SHA-256 digest" || \
+            echo "could not read the certificate"
+          echo
+          echo "Expected: f3bda09ebe57a7ab6ca6fd2092d20fa44786c3db91dda4e05ee5e28bbe0100ed"
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: locust-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
