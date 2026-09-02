@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#08090F">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Locust</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="apple-touch-icon" href="logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- Typography is a nicety, not a dependency: media="print" + onload means a
+     dead network never delays the first paint, and the stacks in app.css fall
+     back to Georgia and the system sans. -->
+<link rel="stylesheet" media="print" onload="this.media='all'"
+      href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,700;0,900;1,500&family=Manrope:wght@400;500;600;700&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;1,7..72,400&display=swap">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<!-- Painted from markup and CSS alone, so it's on screen before a single
+     line of script runs. main.js takes it away once the library is loaded.
+
+     data-hold is how long it stays up at minimum, in milliseconds.
+
+     To use your own animation instead, replace the two elements below with
+     your file and set data-hold to its length:
+       <video src="splash.webm" autoplay muted playsinline></video>
+       <img src="splash.gif" alt="">
+     Anything the WebView can play works here — GIF, MP4, WebM, Lottie.
+     (The *native* splash before this one is a still image by Android's
+     rules; resources/splash.png is that frame, and keeping it as the first
+     frame of your animation makes the handoff invisible.) -->
+<div id="splash" data-hold="1250">
+  <div class="smark">
+    <img src="logo.png" alt="">
+    <span class="sheen"></span>
+  </div>
+  <div class="sword">Locust</div>
+</div>
+
+<div id="app">
+
+  <!-- ============ LIBRARY ============ -->
+  <section class="view on" id="v-library">
+    <header class="top">
+      <img class="mark" src="logo.png" alt="">
+      <div class="titles">
+        <h1 class="wordmark">Locust</h1>
+        <p class="tagline">Reader-first, author-ready</p>
+      </div>
+      <button class="icb" id="searchBtn" aria-label="Search"></button>
+      <button class="btn pri sm" id="newStory">New</button>
+    </header>
+    <div class="srow" id="srow">
+      <div class="inp"><input id="sq" placeholder="Search every story and chapter" autocomplete="off"></div>
+      <button class="btn sm ghost" id="sqClose">Close</button>
+    </div>
+    <div id="alarm"></div>
+    <div id="resume"></div>
+    <div class="seg" id="sortSeg"></div>
+    <div id="shelf"></div>
+  </section>
+
+  <!-- ============ STORY ============ -->
+  <section class="view" id="v-story">
+    <header class="crumb">
+      <button id="backLib" class="crumbback">‹ Library</button>
+      <span class="now" id="crumbTitle"></span>
+      <button class="icb" id="sMore" aria-label="More"></button>
+    </header>
+
+    <div class="block">
+      <div class="coverbox">
+        <div class="art" id="coverArt"></div>
+        <div class="meta">
+          <h2>Cover</h2>
+          <p class="sub">One image, or several — the card fades between them.</p>
+          <div class="row">
+            <button class="btn sm" id="pickCover">Add images</button>
+            <button class="btn sm ghost danger" id="dropCover">Clear all</button>
+          </div>
+        </div>
+      </div>
+      <input type="file" id="coverFile" accept="image/*" multiple hidden>
+      <div class="thumbs" id="thumbs"></div>
+      <p class="hint" id="coverHint"></p>
+    </div>
+
+    <div class="block">
+      <h2>About this story</h2>
+      <div class="field">
+        <label for="sTitle">Title</label>
+        <div class="inp"><input id="sTitle" placeholder="Untitled story"></div>
+      </div>
+      <div class="field">
+        <label for="sDesc">Description</label>
+        <div class="inp"><textarea id="sDesc" rows="2" placeholder="A line or two that sets the mood."></textarea></div>
+      </div>
+      <div class="field">
+        <label>Category</label>
+        <div class="seg wrap" id="sCat"></div>
+      </div>
+      <div class="field">
+        <label for="tagInput">Tags</label>
+        <div class="tagwrap" id="tagWrap"><input id="tagInput" placeholder="Add a tag" autocomplete="off"></div>
+        <p class="hint">Press Enter or type a comma after each one.</p>
+      </div>
+      <div class="field">
+        <label for="sGoal">Word goal</label>
+        <div class="inp"><input id="sGoal" type="number" inputmode="numeric" min="0" placeholder="e.g. 50000"></div>
+      </div>
+    </div>
+
+    <div class="block">
+      <h2>Placeholders</h2>
+      <p class="sub">Write <b>Y/N</b> in your chapters. Reader view swaps in whatever you set here; the draft never changes.</p>
+      <div id="phList"></div>
+      <button class="btn sm block ghost" id="addPh">Add a placeholder</button>
+    </div>
+
+    <div class="block">
+      <div class="blockhead">
+        <div><h2>Notes</h2><p class="sub">Lore, outlines, character sheets. Kept beside the story, out of the chapters.</p></div>
+        <button class="btn sm" id="addNote">Add</button>
+      </div>
+      <div class="chlist" id="noteList"></div>
+    </div>
+
+    <div class="block">
+      <div class="blockhead">
+        <div><h2>Chapters</h2><p class="sub" id="chSummary"></p></div>
+        <button class="btn pri sm" id="addCh">Add</button>
+      </div>
+      <div class="chlist" id="chList"></div>
+    </div>
+    <div class="row" style="padding:4px 0 24px">
+      <button class="btn block" id="readAll">Read as a reader</button>
+    </div>
+  </section>
+
+  <!-- ============ DESK ============ -->
+  <section class="view" id="v-desk">
+    <header class="top">
+      <img class="mark" src="logo.png" alt="">
+      <div class="titles"><h1 class="wordmark">Desk</h1><p class="tagline">Everything you're carrying</p></div>
+    </header>
+    <div id="nudge"></div>
+    <div class="stat">
+      <div><b id="stStories">0</b><span>Stories</span></div>
+      <div><b id="stChapters">0</b><span>Chapters</span></div>
+      <div><b id="stWords">0</b><span>Words</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Momentum</h2>
+      <div class="stat inner">
+        <div><b id="mToday">0</b><span>Words today</span></div>
+        <div><b id="mStreak">0</b><span>Day streak</span></div>
+      </div>
+      <div class="week" id="week"></div>
+    </div>
+
+    <div class="card">
+      <h2>Continue</h2>
+      <div id="recent"></div>
+    </div>
+
+    <div class="card">
+      <h2>Safekeeping</h2>
+      <p class="sub" id="deskStore">Everything here is saved on this device as you write, in Locust's own folder under Android/data. A backup is a single file you can move anywhere.</p>
+      <div class="row">
+        <button class="btn pri sm" id="backup">Export backup</button>
+        <button class="btn sm" id="restore">Restore backup</button>
+      </div>
+      <input type="file" id="restoreFile" accept="application/json,.json" hidden>
+      <p class="hint" id="deskBackup"></p>
+      <div class="divide"></div>
+      <label class="tog"><input type="checkbox" id="optSwap" checked><span>Highlight swapped placeholders in reader view</span></label>
+    </div>
+
+    <div class="card" id="trashCard" hidden>
+      <h2>Trash</h2>
+      <p class="sub">Stories stay here for 30 days, then Locust clears them itself.</p>
+      <div class="chlist" id="trashList"></div>
+    </div>
+  </section>
+
+  <!-- ============ PROFILE ============ -->
+  <section class="view" id="v-profile">
+    <header class="top">
+      <img class="mark" src="logo.png" alt="">
+      <div class="titles"><h1 class="wordmark">Profile</h1><p class="tagline">Yours, on this device</p></div>
+    </header>
+
+    <div class="pcard">
+      <button class="pbanner" id="pfBanner" aria-label="Change banner"></button>
+      <button class="pavatar" id="pfAvatar" aria-label="Change avatar"></button>
+      <input type="file" id="pfBannerFile" accept="image/*" hidden>
+      <input type="file" id="pfAvatarFile" accept="image/*" hidden>
+      <div class="pbody">
+        <div class="pname" id="pfNameBig">Your pen name</div>
+        <div class="phandle" id="pfHandleBig">@you</div>
+        <div class="pbadges" id="pfBadges"></div>
+        <p class="pabout" id="pfAboutBig">Nothing here yet.</p>
+        <p class="psince" id="pfSince"></p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Identity</h2>
+      <div class="field">
+        <label for="pfName">Pen name</label>
+        <div class="inp"><input id="pfName" placeholder="PLUTANI"></div>
+      </div>
+      <div class="field">
+        <label for="pfHandle">Handle</label>
+        <div class="inp at"><span>@</span><input id="pfHandle" placeholder="plutani"></div>
+      </div>
+      <div class="field">
+        <label for="pfLine">About me</label>
+        <div class="inp"><textarea id="pfLine" rows="3" placeholder="What you write, who you are, whatever you want."></textarea></div>
+      </div>
+      <div class="field last">
+        <label for="pfAuthor">Author name on exports</label>
+        <div class="inp"><input id="pfAuthor" placeholder="Same as pen name"></div>
+        <p class="hint">Printed as the author inside EPUB files.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Accent</h2>
+      <p class="sub">Colours every highlight in the app.</p>
+      <div class="swatches" id="pfAccent"></div>
+    </div>
+
+    <div class="card">
+      <h2>On this device</h2>
+      <p class="sub" id="pfStore">Counting…</p>
+      <p class="hint" id="pfWhere"></p>
+      <div class="divide"></div>
+      <p class="sub" id="pfBackup"></p>
+      <div class="row">
+        <button class="btn pri sm" id="pfBackupGo">Export backup</button>
+        <button class="btn sm" id="pfRestoreGo">Restore</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<nav id="nav">
+  <button data-go="library" class="on"><i data-icon="book"></i><span>Library</span></button>
+  <button data-go="desk"><i data-icon="desk"></i><span>Desk</span></button>
+  <button data-go="profile"><i data-icon="person"></i><span>Profile</span></button>
+</nav>
+
+<!-- ============ EDITOR ============ -->
+<div id="v-editor">
+  <div class="ehead">
+    <button class="icb" id="eBack" aria-label="Back"></button>
+    <span class="elabel" id="eLabel"></span>
+    <span class="saved" id="eSaved" title="Saved"></span>
+    <button class="icb" id="eMore" aria-label="More"></button>
+  </div>
+  <div class="escroll" id="escroll">
+    <button class="ebanner" id="eBanner" aria-label="Chapter header image"></button>
+    <input id="eTitle" class="etitle" placeholder="Title your chapter" autocomplete="off">
+    <div class="erule"></div>
+    <div id="editor" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true" data-ph="Start where it hurts."></div>
+  </div>
+  <button class="pill" id="spPill" hidden></button>
+  <div class="bubble" id="bubble">
+    <button data-cmd="bold" class="b">B</button>
+    <button data-cmd="italic" class="i">I</button>
+    <button data-cmd="underline" class="u">U</button>
+    <i class="sep"></i>
+    <button data-cmd="justifyLeft" aria-label="Align left"></button>
+    <button data-cmd="justifyCenter" aria-label="Centre"></button>
+    <button data-cmd="justifyRight" aria-label="Align right"></button>
+  </div>
+  <div class="efoot" id="efoot">
+    <div class="fmtdock" id="fmtDock">
+      <button data-cmd="bold" class="b">B</button>
+      <button data-cmd="italic" class="i">I</button>
+      <button data-cmd="underline" class="u">U</button>
+      <i class="sep"></i>
+      <button data-cmd="justifyLeft" aria-label="Align left"></button>
+      <button data-cmd="justifyCenter" aria-label="Centre"></button>
+      <button data-cmd="justifyRight" aria-label="Align right"></button>
+    </div>
+    <div class="ebar">
+      <button class="icb" id="eUndo" aria-label="Undo"></button>
+      <button class="icb" id="eRedo" aria-label="Redo"></button>
+      <button class="icb aa" id="eAa" aria-label="Formatting">Aa</button>
+      <button class="icb" id="eImg" aria-label="Insert image"></button>
+      <span class="ecount" id="eCount"></span>
+    </div>
+  </div>
+  <div class="frpanel" id="frPanel">
+    <div class="inp"><input id="frFind" placeholder="Find" autocomplete="off"></div>
+    <div class="inp"><input id="frRep" placeholder="Replace with" autocomplete="off"></div>
+    <div class="frrow">
+      <label class="tog small"><input type="checkbox" id="frCase"><span>Match case</span></label>
+      <span class="frres" id="frRes"></span>
+      <button class="btn sm" id="frGo">Replace all</button>
+      <button class="btn sm ghost" id="frDone">Done</button>
+    </div>
+  </div>
+  <input type="file" id="bannerFile" accept="image/*" hidden>
+  <input type="file" id="chImgFile" accept="image/*" multiple hidden>
+</div>
+
+<!-- ============ READER ============ -->
+<div id="v-reader">
+  <div class="rtop">
+    <div class="rrow">
+      <button class="icb" id="rClose" aria-label="Close"></button>
+      <span class="rname" id="rStoryName"></span>
+      <button class="rwhere" id="rWhere"></button>
+      <button class="icb aa" id="rAa" aria-label="Reading comfort">Aa</button>
+      <button class="icb" id="rSpeak" aria-label="Read aloud"></button>
+    </div>
+    <div class="rprog"><i id="rProg"></i></div>
+  </div>
+  <div class="rbody" id="rbody">
+    <div id="rBanner"></div>
+    <p class="rkick" id="rKick"></p>
+    <h1 class="rtitle" id="rTitle"></h1>
+    <p class="rby" id="rBy"></p>
+    <div class="prose" id="rProse"></div>
+    <div class="rend" id="rEnd"></div>
+  </div>
+  <div class="rbar">
+    <button class="btn sm ghost" id="rPrev">‹ Previous</button>
+    <button class="btn sm ghost" id="rNext">Next ›</button>
+  </div>
+</div>
+
+<div id="scrim"><div id="sheet" role="dialog"></div></div>
+<div id="menuBack"><div id="menu" role="menu"></div></div>
+<div id="toast" role="status"></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
